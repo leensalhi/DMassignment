@@ -1,0 +1,126 @@
+#import libraries
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split, StratifiedKFold
+from sklearn.metrics import accuracy_score, f1_score, precision_recall_curve
+from imblearn.over_sampling import SMOTE
+from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import confusion_matrix
+
+#Reading the Data
+train_data = pd.read_csv("train.csv")
+test_data = pd.read_csv("test.csv")
+  
+
+#Explore the Data
+
+X = train_data.drop(columns=['Response', 'id'])
+y = train_data['Response']
+
+
+#Splitting Data into Dependent and Independent Features
+X = X.fillna(X.mean())
+test_data = test_data.fillna(test_data.mean())
+
+
+#Splitting Data into training and test sample
+
+X_train, X_val, y_train, y_val = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+# the model (1)
+
+smote = SMOTE(random_state=42)
+X_train_res, y_train_res = smote.fit_resample(X_train, y_train)
+
+
+#the model(2)
+
+xgb_model = XGBClassifier(
+    n_estimators=1000,
+    max_depth=10,
+    learning_rate=0.01,
+    subsample=0.7,
+    colsample_bytree=0.7,
+    min_child_weight=3,
+    gamma=0.1,
+    reg_alpha=0.5,
+    reg_lambda=1.5,
+    scale_pos_weight=y_train.value_counts()[0] / y_train.value_counts()[1],
+    random_state=42,
+    eval_metric='auc'  # نقل eval_metric هنا
+)
+
+#the model (3)
+
+xgb_model.fit(
+    X_train_res, y_train_res,
+    eval_set=[(X_val, y_val)],
+    verbose=100
+)
+
+y_val_pred = xgb_model.predict(X_val)
+print("XGBoost Validation Accuracy:", accuracy_score(y_val, y_val_pred))
+print("XGBoost Validation F1 Score:", f1_score(y_val, y_val_pred))
+
+
+#the model(4)
+
+
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train_res)
+X_val_scaled = scaler.transform(X_val)
+
+lr = LogisticRegression(max_iter=1000, random_state=42)
+lr.fit(X_train_scaled, y_train_res)
+y_val_pred_lr = lr.predict(X_val_scaled)
+print("Logistic Regression Validation F1 Score:", f1_score(y_val, y_val_pred_lr))
+
+#the modle (5)
+
+lgb_model = LGBMClassifier(
+    n_estimators=1000,
+    max_depth=10,
+    learning_rate=0.01,
+    subsample=0.7,
+    colsample_bytree=0.7,
+    class_weight='balanced',
+    random_state=42
+)
+lgb_model.fit(X_train_res, y_train_res)
+y_val_pred_lgb = lgb_model.predict(X_val)
+print("LightGBM Validation F1 Score:", f1_score(y_val, y_val_pred_lgb))
+
+
+
+#Evaluation
+
+y_probs = xgb_model.predict_proba(X_val)[:, 1]
+precision, recall, thresholds = precision_recall_curve(y_val, y_probs)
+f1_scores = 2 * (precision * recall) / (precision + recall)
+best_threshold = thresholds[np.argmax(f1_scores)]
+print("Best Threshold:", best_threshold)
+
+y_val_pred_adjusted = (y_probs > best_threshold).astype(int)
+print("F1 Score with Adjusted Threshold:", f1_score(y_val, y_val_pred_adjusted))
+
+
+X_test = test_data.drop(columns=['id'])
+test_predictions = xgb_model.predict(X_test)
+
+
+# Create the submission file
+submission = pd.DataFrame({
+    'id': test_data['id'],
+    'Response': test_predictions
+})
+
+submission.to_csv("Submission.csv", index=False)
+print("Submission file created successfully.")
+
+
+
